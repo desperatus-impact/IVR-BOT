@@ -1,0 +1,257 @@
+import logging
+import re
+import asyncio
+import aiosqlite
+import os
+from aiogram import Bot, Dispatcher, types
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, FSInputFile
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import StatesGroup, State
+from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.filters import Command
+
+# API-токен 
+API_TOKEN = '7235205141:AAGfqXaEeWrSh76bCELhZA8gqxi3MbQ8b6s'
+
+if not API_TOKEN:
+    raise ValueError("Необходим API_TOKEN бота Telegram.")
+
+# ID telegram
+ADMIN_IDS = [883718402, 1103809359]
+
+
+logging.basicConfig(level=logging.INFO)
+
+
+bot = Bot(token=API_TOKEN)
+dp = Dispatcher(storage=MemoryStorage())
+
+# Путь к изображениям товаров
+IMAGE_PATH_BLACK = r"W:\artemwork\visualcode\cloth\images\shopper_black.jpg"
+IMAGE_PATH_BEIGE = r"W:\artemwork\visualcode\cloth\images\shopper_beige.jpg"
+
+
+async def init_db():
+    async with aiosqlite.connect('orders.db') as db:
+        await db.execute('''CREATE TABLE IF NOT EXISTS orders 
+                            (id INTEGER PRIMARY KEY AUTOINCREMENT, 
+                             item TEXT, 
+                             full_name TEXT, 
+                             phone_number TEXT)''')
+        await db.commit()
+        logging.info("База данных инициализирована.")
+
+
+class OrderForm(StatesGroup):
+    choosing_item = State()
+    waiting_for_name = State()
+    waiting_for_phone = State()
+    confirmation = State()
+
+
+@dp.message(Command("start"))
+async def send_welcome(message: types.Message, state: FSMContext):
+    
+    markup = ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text='C&P shopper black')],
+            [KeyboardButton(text='C&P shopper beige')]
+        ],
+        resize_keyboard=True
+    )
+
+    
+    try:
+        if not os.path.exists(IMAGE_PATH_BLACK):
+            logging.error(f"Файл не найден: {IMAGE_PATH_BLACK}")
+            await message.answer("Изображение товара C&P shopper black не найдено.")
+            return
+
+        if not os.path.exists(IMAGE_PATH_BEIGE):
+            logging.error(f"Файл не найден: {IMAGE_PATH_BEIGE}")
+            await message.answer("Изображение товара C&P shopper beige не найдено.")
+            return
+
+        black_bag_photo = FSInputFile(IMAGE_PATH_BLACK)
+        beige_bag_photo = FSInputFile(IMAGE_PATH_BEIGE)
+    except Exception as e:
+        logging.exception("Ошибка при загрузке изображений:")
+        await message.answer("Произошла ошибка при загрузке изображений.")
+        return
+
+    await message.answer_photo(photo=black_bag_photo, caption="C&P shopper black 1950р")
+    await message.answer_photo(photo=beige_bag_photo, caption="C&P shopper beige 1950р")
+
+    await message.answer(f"Привет, {message.from_user.first_name}! Пожалуйста, выберите товар:", reply_markup=markup)
+    await state.set_state(OrderForm.choosing_item)
+
+
+@dp.message(OrderForm.choosing_item)
+async def choose_item(message: types.Message, state: FSMContext):
+    if message.text not in ['C&P shopper black', 'C&P shopper beige']:
+        await message.answer("Пожалуйста, выберите товар из предложенных.")
+        return
+
+    await state.update_data(item=message.text)
+
+    
+    await message.answer("Укажите свои контактные данные.\nВаше полное имя:", reply_markup=types.ReplyKeyboardRemove())
+    await state.set_state(OrderForm.waiting_for_name)
+
+
+@dp.message(OrderForm.waiting_for_name)
+async def get_full_name(message: types.Message, state: FSMContext):
+    full_name = message.text.strip()
+
+    if not full_name or len(full_name.split()) < 2:
+        await message.answer("Пожалуйста, введите полное имя (имя и фамилию).")
+        return
+
+    await state.update_data(full_name=full_name)
+    await message.answer("Ваш номер телефона (в формате +79991234567):")
+    await state.set_state(OrderForm.waiting_for_phone)
+
+
+@dp.message(OrderForm.waiting_for_phone)
+async def get_phone_number(message: types.Message, state: FSMContext):
+    phone_number = message.text.strip()
+
+    
+    if not re.fullmatch(r'\+?\d{10,15}', phone_number):
+        await message.answer("Пожалуйста, введите корректный номер телефона в международном формате (например, +79991234567).")
+        return
+
+    await state.update_data(phone_number=phone_number)
+
+    
+    data = await state.get_data()
+    item = data['item']
+    full_name = data['full_name']
+    phone_number = data['phone_number']
+
+    markup = ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text='Да, все верно')],
+            [KeyboardButton(text='Нет, изменить данные')]
+        ],
+        resize_keyboard=True
+    )
+
+    await message.answer(f"Пожалуйста, подтвердите ваши данные:\n\n"
+                         f"Товар: {item}\n"
+                         f"Полное имя: {full_name}\n"
+                         f"Телефон: {phone_number}\n\n"
+                         f"Все ли верно?", reply_markup=markup)
+    await state.set_state(OrderForm.confirmation)
+
+
+@dp.message(OrderForm.confirmation)
+async def confirm_data(message: types.Message, state: FSMContext):
+    if message.text == 'Да, все верно':
+        data = await state.get_data()
+        item = data['item']
+        full_name = data['full_name']
+        phone_number = data['phone_number']
+
+        try:
+            
+            async with aiosqlite.connect('orders.db') as db:
+                await db.execute('INSERT INTO orders (item, full_name, phone_number) VALUES (?, ?, ?)',
+                                 (item, full_name, phone_number))
+                await db.commit()
+                logging.info(f"Заказ сохранен: {item}, {full_name}, {phone_number}")
+        except Exception as e:
+            logging.exception("Ошибка при сохранении заказа:")
+            await message.answer("Произошла ошибка при сохранении вашего заказа. Пожалуйста, попробуйте позже.")
+            await state.clear()
+            return
+
+        await message.answer("Ваш заказ сохранен. Спасибо за покупку!", reply_markup=types.ReplyKeyboardRemove())
+        await state.clear()
+
+    elif message.text == 'Нет, изменить данные':
+        
+        markup = ReplyKeyboardMarkup(
+            keyboard=[
+                [KeyboardButton(text='C&P shopper black')],
+                [KeyboardButton(text='C&P shopper beige')]
+            ],
+            resize_keyboard=True
+        )
+        await message.answer("Пожалуйста, выберите товар снова:", reply_markup=markup)
+        await state.set_state(OrderForm.choosing_item)
+    else:
+        await message.answer("Пожалуйста, выберите один из предложенных вариантов.")
+
+
+@dp.message(Command("list_orders"))
+async def list_orders_command(message: types.Message):
+    user_id = message.from_user.id
+
+    
+    if user_id not in ADMIN_IDS:
+        await message.answer("У вас нет прав для выполнения этой команды.")
+        return
+
+    try:
+        async with aiosqlite.connect('orders.db') as db:
+            cursor = await db.execute('SELECT id, item, full_name, phone_number FROM orders')
+            orders = await cursor.fetchall()
+
+            if not orders:
+                await message.answer("Заказов нет.")
+                return
+
+            
+            orders_list = []
+            for order in orders:
+                order_id, item, full_name, phone_number = order
+                orders_list.append(
+                    f"ID: {order_id}\nТовар: {item}\nИмя: {full_name}\nТелефон: {phone_number}\n---"
+                )
+            orders_text = "\n".join(orders_list)
+            await message.answer(f"Список заказов:\n\n{orders_text}")
+    except Exception as e:
+        logging.exception("Ошибка при получении списка заказов:")
+        await message.answer("Произошла ошибка при получении списка заказов. Пожалуйста, попробуйте позже.")
+
+
+@dp.message(Command("delete_order"))
+async def delete_order_command(message: types.Message):
+    user_id = message.from_user.id
+
+    
+    if user_id not in ADMIN_IDS:
+        await message.answer("У вас нет прав для выполнения этой команды.")
+        return
+
+    # Разбиваем сообщение, чтобы получить ID заказа
+    parts = message.text.strip().split()
+    if len(parts) != 2:
+        await message.answer("Пожалуйста, используйте формат команды: /delete_order <order_id>")
+        return
+
+    order_id = parts[1]
+
+    try:
+        async with aiosqlite.connect('orders.db') as db:
+            cursor = await db.execute('DELETE FROM orders WHERE id = ?', (order_id,))
+            await db.commit()
+            if cursor.rowcount > 0:
+                await message.answer(f"Заказ с ID {order_id} был удален.")
+                logging.info(f"Заказ удален: ID {order_id}")
+            else:
+                await message.answer(f"Заказ с ID {order_id} не найден.")
+    except Exception as e:
+        logging.exception("Ошибка при удалении заказа:")
+        await message.answer("Произошла ошибка при удалении заказа. Пожалуйста, попробуйте позже.")
+
+# Обработка неожиданных сообщений
+@dp.message()
+async def handle_unexpected_message(message: types.Message):
+    await message.answer("Пожалуйста, используйте /start для начала оформления заказа.")
+
+if __name__ == '__main__':
+    # Инициализация базы данных и запуск бота
+    asyncio.run(init_db())
+    dp.run_polling(bot)
