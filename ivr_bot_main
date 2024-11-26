@@ -11,13 +11,13 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.filters import Command
 
 # API-токен 
-API_TOKEN = '7235205141:AAGfqXaEeWrSh76bCELhZA8gqxi3MbQ8b6s'
+API_TOKEN = your_API
 
 if not API_TOKEN:
     raise ValueError("Необходим API_TOKEN бота Telegram.")
 
 # ID telegram
-ADMIN_IDS = [883718402, 1103809359]
+ADMIN_IDS = [ID]
 
 
 logging.basicConfig(level=logging.INFO)
@@ -27,8 +27,8 @@ bot = Bot(token=API_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
 # Путь к изображениям товаров
-IMAGE_PATH_BLACK = r"W:\artemwork\visualcode\cloth\images\shopper_black.jpg"
-IMAGE_PATH_BEIGE = r"W:\artemwork\visualcode\cloth\images\shopper_beige.jpg"
+IMAGE_PATH_BLACK = r""
+IMAGE_PATH_BEIGE = r""
 
 
 async def init_db():
